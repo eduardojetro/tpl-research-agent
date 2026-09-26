@@ -43,24 +43,54 @@ Quota cost: 5 queries x (100 search + ~1 videos + ~1 channels) ~= 510
 units/day, on top of the existing daily collection run (~450-800/day
 observed) -- comfortably inside the 10,000/day free cap.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 import db
 from collectors.youtube_collector import _api_get
 
-# (search query, associated seed_theme or None if it doesn't map to one of
-# the 4 research themes yet -- CEO's list named these 5 specifically).
+# Reprioritized 2026-09-26 per Caramelo 03's triage of the first radar run:
+# 9 of 20 results were non-English, and 60% came from postpartum_recovery
+# (a theme with no published answer yet -- pure backlog for Tiao 02, not
+# usable today). Queries below favor the themes that already have a
+# published answer (fear/anxiety of birth, unmedicated birth, birth prep),
+# with postpartum kept but deliberately just one query so it competes for
+# fewer of the top-N slots instead of dominating them.
 QUERIES = [
-    ("fear of childbirth", "childbirth_prep"),
-    ("labor induction", "childbirth_prep"),
-    ("dad in the delivery room", None),
-    ("epidural", "childbirth_prep"),
+    ("scared of giving birth", "childbirth_prep"),
+    ("birth anxiety", "childbirth_prep"),
+    ("labor fear", "childbirth_prep"),
+    ("unmedicated birth tips", "childbirth_prep"),
+    ("birth partner tips", None),
+    ("labor prep exercises", "childbirth_prep"),
     ("postpartum recovery", "postpartum_recovery"),
 ]
 
 MAX_RESULTS_PER_QUERY = 20
-LOOKBACK_DAYS = 14
+LOOKBACK_DAYS = 7  # was 14 -- Caramelo flagged several results at 250-330h old; fresher = more actionable
 TOP_N = 20
+
+# Unicode script ranges for the languages Caramelo actually saw contaminating
+# the first run (Hindi/Devanagari, Arabic, Bengali, Tamil) -- a title with any
+# character in these ranges is dropped outright. This does NOT catch French/
+# Spanish (still Latin script); those are only discouraged by
+# relevanceLanguage+regionCode below, not guaranteed excluded -- a real
+# per-title language detector would be needed to close that gap, not added
+# here to keep this free and dependency-light.
+_NON_LATIN_SCRIPT_RANGES = [
+    (0x0900, 0x097F),  # Devanagari (Hindi)
+    (0x0600, 0x06FF),  # Arabic
+    (0x0980, 0x09FF),  # Bengali
+    (0x0B80, 0x0BFF),  # Tamil
+]
+
+
+def _looks_non_english_script(title: str) -> bool:
+    return any(
+        lo <= ord(ch) <= hi
+        for ch in title
+        for lo, hi in _NON_LATIN_SCRIPT_RANGES
+    )
 
 
 def _search_shorts(query: str) -> list:
@@ -71,31 +101,59 @@ def _search_shorts(query: str) -> list:
         "publishedAfter": published_after,
         "maxResults": MAX_RESULTS_PER_QUERY,
         "relevanceLanguage": "en",
+        "regionCode": "US",  # a single call only supports one region -- US chosen as the larger English-speaking audience; add a second GB-region pass later if this isn't enough
     })
-    return [
-        {
+    results = []
+    for item in data.get("items", []):
+        title = item["snippet"]["title"]
+        if _looks_non_english_script(title):
+            continue
+        results.append({
             "video_id": item["id"]["videoId"],
-            "title": item["snippet"]["title"],
+            "title": title,
             "channel_id": item["snippet"]["channelId"],
             "channel_title": item["snippet"]["channelTitle"],
             "published_at": item["snippet"]["publishedAt"],
-        }
-        for item in data.get("items", [])
-    ]
+        })
+    return results
 
 
 def _fetch_video_stats(video_ids: list) -> dict:
     if not video_ids:
         return {}
-    data = _api_get("videos", {"part": "statistics", "id": ",".join(video_ids)})
-    return {
-        item["id"]: {
+    # part=snippet,statistics (not just statistics) -- snippet carries
+    # defaultLanguage/defaultAudioLanguage, a more reliable English/non-English
+    # signal than guessing from the title's script when the uploader set it
+    # (many don't -- absent means "unknown", not "non-English", so it's only
+    # used to DROP on a confirmed non-en value, never to require its presence).
+    data = _api_get("videos", {"part": "snippet,statistics", "id": ",".join(video_ids)})
+    result = {}
+    for item in data.get("items", []):
+        snippet = item.get("snippet", {})
+        lang = snippet.get("defaultLanguage") or snippet.get("defaultAudioLanguage")
+        if lang and not lang.lower().startswith("en"):
+            continue  # confirmed non-English by the uploader's own metadata -- drop
+        result[item["id"]] = {
             "view_count": int(item.get("statistics", {}).get("viewCount", 0)),
             "like_count": int(item.get("statistics", {}).get("likeCount", 0)),
             "comment_count": int(item.get("statistics", {}).get("commentCount", 0)),
+            "tags": snippet.get("tags", []),
+            "description": snippet.get("description", ""),
         }
-        for item in data.get("items", [])
-    }
+    return result
+
+
+def _fetch_transcript(video_id: str):
+    """Free, no API key (not the official YouTube Data API -- scrapes the
+    public timedtext endpoint) -- so it costs no quota, only latency. Many
+    videos have transcripts disabled or no English auto-caption; that's a
+    normal, expected outcome here, not an error worth logging loudly."""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        fetched = YouTubeTranscriptApi().fetch(video_id, languages=("en",))
+        return " ".join(snippet["text"] for snippet in fetched.to_raw_data())
+    except Exception:
+        return None
 
 
 def _fetch_channel_avg_views(channel_ids: list) -> dict:
@@ -148,6 +206,8 @@ def run() -> list:
                 "views": s["view_count"],
                 "like_count": s["like_count"],
                 "comment_count": s["comment_count"],
+                "tags": s["tags"],
+                "description": s["description"],
                 "posted_at": v["published_at"],
                 "age_hours": round(age_hours, 1),
                 "views_per_hour": round(s["view_count"] / age_hours, 1),
@@ -160,7 +220,17 @@ def run() -> list:
     # norm" (Caramelo's triage criteria: ratio >= 5, or >=100k views on a
     # small channel -- applied by Caramelo/CEO on the stored rows, not here).
     all_rows.sort(key=lambda r: (r["ratio"] is None, -(r["ratio"] or 0)))
-    return all_rows[:TOP_N]
+    top_rows = all_rows[:TOP_N]
+
+    # Transcript only for the top 10, per CEO's request -- it's free (no
+    # YouTube quota, separate library) but adds real latency (one HTTP
+    # fetch per video), so it's not worth paying for all TOP_N=20.
+    for row in top_rows[:10]:
+        row["transcript"] = _fetch_transcript(row["external_id"])
+    for row in top_rows[10:]:
+        row["transcript"] = None
+
+    return top_rows
 
 
 def store(rows: list):
@@ -168,8 +238,13 @@ def store(rows: list):
         print("[viral_radar] no rows to store.")
         return
     client = db.get_client()
-    client.table("viral_radar").insert(rows).execute()
-    print(f"[viral_radar] {len(rows)} rows inserted into Supabase.")
+    # upsert, not insert -- the same video can legitimately resurface across
+    # different queries (e.g. matches both "birth anxiety" and "labor fear"),
+    # and running this script twice in one day is meant to refresh stats
+    # (views climb), not error out on the (platform, external_id, day)
+    # unique index.
+    client.table("viral_radar").upsert(rows, on_conflict="platform,external_id,found_date").execute()
+    print(f"[viral_radar] {len(rows)} rows upserted into Supabase.")
 
 
 def write_csv(rows: list):

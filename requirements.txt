@@ -7,3 +7,4 @@ google-genai>=2.24.0
 groq>=1.7.0
 anthropic>=1.7.0
 requests>=2.34.0
+youtube-transcript-api>=1.2.4
