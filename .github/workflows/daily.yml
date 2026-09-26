@@ -31,6 +31,18 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project tpl-brain --config dev -- python run_daily.py
 
+      - name: Run viral radar (YouTube Shorts, free -- distribution signal for Caramelo 03)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        # Supabase (viral_radar table) is the real cross-session interface here --
+        # Caramelo reads/writes the same table for TikTok/Instagram rows. The
+        # script also writes a CSV to distribution/radar/, but that path lives
+        # in the Drive-synced folder OUTSIDE this repo (a sibling of
+        # research_agent/, not checked out here) -- it's a convenience for
+        # local/manual runs only, not reachable or committable from this
+        # runner, so there's nothing to commit back here.
+        run: doppler run --project tpl-brain --config dev -- python viral_radar.py
+
       - name: Upload log
         if: always()
         uses: actions/upload-artifact@v4

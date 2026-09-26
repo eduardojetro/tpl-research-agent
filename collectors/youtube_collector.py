@@ -40,7 +40,7 @@ API_BASE = "https://www.googleapis.com/youtube/v3"
 # Cloud Console dashboard shows real usage too, but with lag, and only if
 # you go look) -- every run appends its total to a local CSV so "how much
 # did we use today / this week" is answerable without opening a browser.
-_UNIT_COSTS = {"search": 100, "videos": 1, "commentThreads": 1}
+_UNIT_COSTS = {"search": 100, "videos": 1, "commentThreads": 1, "channels": 1}
 _units_used_this_process = 0
 _QUOTA_LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "youtube_quota_log.csv")
 
