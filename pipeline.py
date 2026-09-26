@@ -37,10 +37,19 @@ from typing import Dict, List
 import db
 import scoring
 import sources_seed
-from collectors import reddit_collector, apify_reddit_collector, youtube_collector, evidence_collector
+from collectors import reddit_collector, youtube_collector, evidence_collector
 from extraction import llm_client, prompts
 
 MIN_CONTENT_CHARS = 60  # below this, a comment is almost never a real problem statement
+
+# Explicit decision 2026-09-26: pause ALL Apify spend (Reddit fallback here,
+# and the weekly Instagram/TikTok run) to preserve the remaining ~$0.61 of
+# this cycle's $5 free credit -- Eduardo wants that budget saved for
+# Instagram/TikTok (the platforms he sees as the real opportunity) rather
+# than spent on Reddit day to day. apify_reddit_collector.py is untouched
+# and still fully working -- flip this back to True whenever Apify spend is
+# wanted again, no other code changes needed.
+APIFY_REDDIT_ENABLED = False
 
 
 def _store_items(items: List[Dict], seed_theme: str, platform: str) -> int:
@@ -79,19 +88,18 @@ def collect_theme(seed_theme: str) -> int:
         total_inserted += n
         print(f"[collect] reddit (PRAW): {n} new raw_items inserted ({len(reddit_items)} fetched, rest were dupes).")
     except Exception as exc:
-        # PRAW app still pending Reddit's approval (as of 2026-09-25) --
-        # fall back to the Apify actor instead of losing this source
-        # entirely. Once PRAW is approved, this branch simply stops
-        # triggering (reddit_collector.collect succeeds above) -- no code
-        # change needed to "switch back".
-        print(f"[collect] reddit (PRAW) SKIPPED ({exc}), falling back to Apify...")
-        try:
-            apify_items = apify_reddit_collector.collect(query=theme["search_query"], subreddits=theme["subreddits"])
-            n = _store_items(apify_items, seed_theme, platform="reddit")
-            total_inserted += n
-            print(f"[collect] reddit (Apify): {n} new raw_items inserted ({len(apify_items)} fetched, rest were dupes).")
-        except Exception as exc2:
-            print(f"[collect] reddit (Apify) SKIPPED: {exc2}")
+        print(f"[collect] reddit (PRAW) SKIPPED ({exc}).")
+        if not APIFY_REDDIT_ENABLED:
+            print("[collect] reddit (Apify) SKIPPED: paused by explicit decision to preserve Apify credit (see pipeline.APIFY_REDDIT_ENABLED).")
+        else:
+            try:
+                from collectors import apify_reddit_collector
+                apify_items = apify_reddit_collector.collect(query=theme["search_query"], subreddits=theme["subreddits"])
+                n = _store_items(apify_items, seed_theme, platform="reddit")
+                total_inserted += n
+                print(f"[collect] reddit (Apify): {n} new raw_items inserted ({len(apify_items)} fetched, rest were dupes).")
+            except Exception as exc2:
+                print(f"[collect] reddit (Apify) SKIPPED: {exc2}")
 
     if "youtube_query" in theme:
         try:

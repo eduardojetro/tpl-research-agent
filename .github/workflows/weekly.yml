@@ -1,10 +1,13 @@
 name: Weekly Instagram+TikTok collection
 
 on:
-  schedule:
-    # 06:00 UTC Monday = 07:00 Lisbon/London during BST (see daily.yml for
-    # the same DST-drift note).
-    - cron: "0 6 * * 1"
+  # Schedule paused 2026-09-26: explicit decision to stop all Apify spend
+  # (Reddit's daily fallback too, see pipeline.APIFY_REDDIT_ENABLED) and
+  # preserve the ~$0.61 left of this cycle's $5 free credit for when
+  # Instagram/TikTok get invested in properly, instead of trickling it away
+  # a little each week. workflow_dispatch below still lets this be
+  # triggered manually any time without re-adding the cron.
+  # - cron: "0 6 * * 1"  # was: 06:00 UTC Monday = 07:00 Lisbon/London (BST)
   workflow_dispatch: {}
 
 jobs:
