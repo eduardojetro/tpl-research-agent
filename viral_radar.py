@@ -39,11 +39,21 @@ YouTube rows -- matching a video to a specific `problems` row or judging
 `theme` (the query's associated seed_theme, where one applies) is the
 automated link for now.
 
-Quota cost: 5 queries x (100 search + ~1 videos + ~1 channels) ~= 510
+Quota cost: 7 queries x (100 search + ~1 videos + ~1 channels) ~= 714
 units/day, on top of the existing daily collection run (~450-800/day
 observed) -- comfortably inside the 10,000/day free cap.
+
+2026-09-26 v3 (same day as v1/v2, per Caramelo 03's continued triage):
+window widened back to 30 days for his modeling method (negative controls
+need a wider net than the react-now use case) with a per-row react_ready
+flag (age_hours <= 14 days) so "actionable this week" doesn't need a
+second search pass; real language detection (langdetect) added on top of
+the script-range + defaultLanguage checks, closing the French/Spanish/
+transliterated-Hindi gap those two couldn't catch; and a views floor
+(10k) for anything with ratio >= 1.5, while low-ratio videos stay in
+regardless of size since Caramelo's method needs those as negative
+controls, not just winners.
 """
-import re
 from datetime import datetime, timedelta, timezone
 
 import db
@@ -67,8 +77,20 @@ QUERIES = [
 ]
 
 MAX_RESULTS_PER_QUERY = 20
-LOOKBACK_DAYS = 7  # was 14 -- Caramelo flagged several results at 250-330h old; fresher = more actionable
+# 30 days, not 7 -- Caramelo's modeling method (negative controls included)
+# wants a wider net than the react-now use case. react_ready (below) is the
+# per-row flag that narrows back down to "actionable this week" without
+# needing a second, quota-costing search pass.
+LOOKBACK_DAYS = 30
+REACT_READY_HOURS = 336  # 14 days -- react_strategy_v1.md §4: <=14d actionable, <=7d ideal (Caramelo filters "ideal" himself off age_hours)
 TOP_N = 20
+# Below this view count, a high ratio is more likely small-channel noise
+# than a real viral signal -- EXCEPT ratio < 1.5 rows, which Caramelo wants
+# to keep regardless of size: his modeling method needs negative controls
+# (same-niche videos that did NOT take off) to compare against, and a tiny
+# ratio is exactly what a control looks like.
+MIN_VIEWS_FOR_TOP = 10_000
+CONTROL_CANDIDATE_RATIO_CEILING = 1.5
 
 # Unicode script ranges for the languages Caramelo actually saw contaminating
 # the first run (Hindi/Devanagari, Arabic, Bengali, Tamil) -- a title with any
@@ -91,6 +113,23 @@ def _looks_non_english_script(title: str) -> bool:
         for ch in title
         for lo, hi in _NON_LATIN_SCRIPT_RANGES
     )
+
+
+def _looks_non_english(title: str, description: str) -> bool:
+    """Real language detection (langdetect, free, offline, no API) -- closes
+    the gap the script-range check above can't: French/Spanish/transliterated
+    Hindi all use Latin characters, so they pass the script check but aren't
+    English. Caramelo flagged exactly these three in the first two runs.
+    Title alone is often too short for langdetect to be reliable, so this
+    runs on title+description together. Detection failure (langdetect raises
+    on very short/ambiguous text) is treated as "unknown", not "non-English"
+    -- same fail-open philosophy as the defaultLanguage check: only drop on
+    a CONFIRMED non-en result."""
+    try:
+        from langdetect import detect
+        return detect(f"{title} {description}".strip()) != "en"
+    except Exception:
+        return False
 
 
 def _search_shorts(query: str) -> list:
@@ -190,10 +229,19 @@ def run() -> list:
             s = stats.get(v["video_id"])
             if not s:
                 continue
+            if _looks_non_english(v["title"], s["description"]):
+                continue
             published_at = datetime.strptime(v["published_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
             age_hours = max((now - published_at).total_seconds() / 3600, 1.0)
             channel_avg = channel_avgs.get(v["channel_id"])
             ratio = (s["view_count"] / channel_avg) if channel_avg else None
+
+            # Views floor: below MIN_VIEWS_FOR_TOP a high ratio is usually
+            # small-channel noise, not a modelable viral -- but a LOW ratio
+            # is kept regardless of size, because Caramelo's method needs
+            # negative controls (same-niche videos that did not take off).
+            if s["view_count"] < MIN_VIEWS_FOR_TOP and (ratio is None or ratio >= CONTROL_CANDIDATE_RATIO_CEILING):
+                continue
 
             all_rows.append({
                 "platform": "youtube",
@@ -210,6 +258,7 @@ def run() -> list:
                 "description": s["description"],
                 "posted_at": v["published_at"],
                 "age_hours": round(age_hours, 1),
+                "react_ready": age_hours <= REACT_READY_HOURS,
                 "views_per_hour": round(s["view_count"] / age_hours, 1),
                 "channel_median_views": round(channel_avg, 1) if channel_avg else None,
                 "ratio": round(ratio, 2) if ratio else None,
@@ -255,7 +304,7 @@ def write_csv(rows: list):
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.csv")
     fieldnames = ["url", "title", "creator_handle", "query", "theme", "views",
-                  "views_per_hour", "channel_median_views", "ratio", "age_hours"]
+                  "views_per_hour", "channel_median_views", "ratio", "age_hours", "react_ready"]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
