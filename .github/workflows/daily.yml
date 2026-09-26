@@ -1,0 +1,40 @@
+name: Daily research agent
+
+on:
+  schedule:
+    # 05:00 UTC = 06:00 in Lisbon/London during BST (British Summer Time).
+    # GitHub Actions cron is UTC-only, so this runs at 07:00 local instead
+    # of 06:00 during GMT (late Oct - late Mar) -- a known ~1h drift twice a
+    # year, not worth a timezone-aware workaround for a research pipeline.
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}  # lets us trigger a run manually from the Actions tab to test
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Doppler CLI
+        run: (curl -Ls --tlsv1.2 --proto "=https" https://cli.doppler.com/install.sh || wget -t 3 -qO- https://cli.doppler.com/install.sh) | sudo sh
+
+      - name: Run daily pipeline
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project tpl-brain --config dev -- python run_daily.py
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-log-${{ github.run_id }}
+          path: logs/*.log
+          retention-days: 30

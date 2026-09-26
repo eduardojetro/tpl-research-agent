@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+logs/
+*.env
+.env
+apify_*_test_output.json

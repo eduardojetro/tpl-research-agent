@@ -1,0 +1,9 @@
+supabase>=2.31.0
+praw>=8.0.3
+python-dotenv>=1.0.0
+crawl4ai>=0.9.3
+apify-client>=3.2.0
+google-genai>=2.24.0
+groq>=1.7.0
+anthropic>=1.7.0
+requests>=2.34.0

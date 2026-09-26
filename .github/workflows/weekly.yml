@@ -1,0 +1,38 @@
+name: Weekly Instagram+TikTok collection
+
+on:
+  schedule:
+    # 06:00 UTC Monday = 07:00 Lisbon/London during BST (see daily.yml for
+    # the same DST-drift note).
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Doppler CLI
+        run: (curl -Ls --tlsv1.2 --proto "=https" https://cli.doppler.com/install.sh || wget -t 3 -qO- https://cli.doppler.com/install.sh) | sudo sh
+
+      - name: Run weekly collection
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project tpl-brain --config dev -- python run_weekly.py
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-log-${{ github.run_id }}
+          path: logs/*.log
+          retention-days: 30
