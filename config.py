@@ -64,17 +64,15 @@ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 #                  llama-3.3-70b-versatile (the original default here) was
 #                  retired; confirm current models with
 #                  `Groq(api_key=...).models.list()` before assuming a name works.
-#   "anthropic" -- paid only, no free tier. Best quality, needed later once
-#                  volume/quality requirements outgrow the free options.
+# Paid Anthropic API is not allowed for TPL (business rule 2026-09-26);
+# Claude work happens inside plan-included Claude sessions, not via API.
 LLM_PROVIDER = os.environ.get("TPL_LLM_PROVIDER", "gemini")
 
 _DEFAULT_MODELS = {
     "gemini": "gemini-2.5-flash",
     "groq": "openai/gpt-oss-120b",
-    "anthropic": "claude-haiku-4-5-20251001",
 }
 LLM_MODEL = os.environ.get("TPL_LLM_MODEL", _DEFAULT_MODELS.get(LLM_PROVIDER))
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")

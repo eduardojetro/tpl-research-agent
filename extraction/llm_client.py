@@ -13,9 +13,6 @@ provider is a one-line env var change, not a code change:
     open-weight models (Llama 3.3 70B by default here). Roughly comparable
     quality to Gemini Flash for structured JSON extraction, useful as a
     second free option if Gemini's daily cap is hit mid-run.
-  - "anthropic": paid only (no free tier), Claude Haiku 4.5. Kept as the
-    fallback for when quality/consistency needs to go up a notch -- has
-    prompt caching wired in since every request there costs real money.
 
 All three are asked for JSON-only output; each backend's helper is
 responsible for actually enforcing/parsing that.
@@ -28,7 +25,19 @@ brings in higher volume later.
 import json
 import re
 import time
+import datetime
+import os
 from typing import List, Dict
+
+def _log_usage(provider: str, stage: str, in_tokens: int, out_tokens: int):
+    os.makedirs("logs", exist_ok=True)
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    path = "logs/llm_usage_log.csv"
+    write_header = not os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if write_header:
+            f.write("date,provider,stage,calls,in_tokens,out_tokens\n")
+        f.write(f"{today},{provider},{stage},1,{in_tokens},{out_tokens}\n")
 
 import config
 from extraction.prompts import (
@@ -90,7 +99,6 @@ def _with_retry(fn, *args, **kwargs):
             last_exc = exc
     raise last_exc
 
-_anthropic_client = None
 _gemini_client = None
 _groq_client = None
 
@@ -152,6 +160,8 @@ def _expand_batch_gemini(items: List[Dict]) -> List[dict]:
             response_mime_type="application/json",
         ),
     )
+    if hasattr(response, "usage_metadata") and response.usage_metadata:
+        _log_usage("gemini", "extract", response.usage_metadata.prompt_token_count, response.usage_metadata.candidates_token_count)
     parsed = _extract_json(response.text)
     return _results_from_batch_json(parsed, len(items))
 
@@ -181,38 +191,11 @@ def _expand_batch_groq(items: List[Dict]) -> List[dict]:
             {"role": "user", "content": _format_batch_input(items)},
         ],
     )
+    if hasattr(response, "usage") and response.usage:
+        _log_usage("groq", "extract", response.usage.prompt_tokens, response.usage.completion_tokens)
     parsed = _extract_json(response.choices[0].message.content)
     return _results_from_batch_json(parsed, len(items))
 
-
-# ------------------------------------------------------------ Anthropic --
-
-def _get_anthropic_client():
-    global _anthropic_client
-    if _anthropic_client is None:
-        if not config.ANTHROPIC_API_KEY:
-            raise EnvironmentError("ANTHROPIC_API_KEY not set in secrets .env")
-        from anthropic import Anthropic
-        _anthropic_client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    return _anthropic_client
-
-
-def _expand_batch_anthropic(items: List[Dict]) -> List[dict]:
-    client = _get_anthropic_client()
-    response = client.messages.create(
-        model=config.LLM_MODEL,
-        max_tokens=800 * len(items),
-        system=[
-            {
-                "type": "text",
-                "text": PROBLEM_EXPANSION_BATCH_SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": _format_batch_input(items)}],
-    )
-    parsed = _extract_json(response.content[0].text)
-    return _results_from_batch_json(parsed, len(items))
 
 
 def expand_problem(raw_text: str, source: str, title: str = "") -> dict:
@@ -223,7 +206,6 @@ def expand_problem(raw_text: str, source: str, title: str = "") -> dict:
 _BACKENDS = {
     "gemini": _expand_batch_gemini,
     "groq": _expand_batch_groq,
-    "anthropic": _expand_batch_anthropic,
 }
 
 
@@ -269,6 +251,8 @@ def _cluster_gemini(core_problems: List[str]) -> dict:
             max_output_tokens=_cluster_max_tokens(len(core_problems)),
         ),
     )
+    if hasattr(response, "usage_metadata") and response.usage_metadata:
+        _log_usage("gemini", "cluster", response.usage_metadata.prompt_token_count, response.usage_metadata.candidates_token_count)
     return _extract_json(response.text)
 
 
@@ -283,24 +267,14 @@ def _cluster_groq(core_problems: List[str]) -> dict:
             {"role": "user", "content": _format_clustering_input(core_problems)},
         ],
     )
+    if hasattr(response, "usage") and response.usage:
+        _log_usage("groq", "cluster", response.usage.prompt_tokens, response.usage.completion_tokens)
     return _extract_json(response.choices[0].message.content)
-
-
-def _cluster_anthropic(core_problems: List[str]) -> dict:
-    client = _get_anthropic_client()
-    response = client.messages.create(
-        model=config.LLM_MODEL,
-        max_tokens=_cluster_max_tokens(len(core_problems)),
-        system=[{"type": "text", "text": CLUSTERING_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": _format_clustering_input(core_problems)}],
-    )
-    return _extract_json(response.content[0].text)
 
 
 _CLUSTER_BACKENDS = {
     "gemini": _cluster_gemini,
     "groq": _cluster_groq,
-    "anthropic": _cluster_anthropic,
 }
 
 

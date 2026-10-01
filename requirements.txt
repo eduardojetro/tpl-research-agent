@@ -5,7 +5,6 @@ crawl4ai>=0.9.3
 apify-client>=3.2.0
 google-genai>=2.24.0
 groq>=1.7.0
-anthropic>=1.7.0
 requests>=2.34.0
 youtube-transcript-api>=1.2.4
 langdetect>=1.0.9

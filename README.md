@@ -6,7 +6,7 @@ but is not yet wired into scoring (see `pipeline.py` docstring).
 
 The LLM step defaults to **Gemini 2.5 Flash on the free tier** (no credit
 card, ~1,500 requests/day) -- see `extraction/llm_client.py` for the
-provider comparison. Switch provider with `TPL_LLM_PROVIDER=groq|anthropic`
+provider comparison. Switch provider with `TPL_LLM_PROVIDER=groq|gemini`
 in the secrets `.env`, no code change needed.
 
 ## One-time setup
@@ -24,7 +24,7 @@ in the secrets `.env`, no code change needed.
      (the old `robo_reddit.bat` / `reddit_solver.py` in the parent folder automates filling that form;
      you still do the captcha + click "create app" yourself)
    - `GEMINI_API_KEY` -- free key, no credit card, from https://aistudio.google.com/apikey
-     (this is the only LLM key needed by default -- leave GROQ_API_KEY/ANTHROPIC_API_KEY blank
+     (this is the only LLM key needed by default -- leave GROQ_API_KEY blank
      unless you change TPL_LLM_PROVIDER)
    - `APIFY_TOKEN` -- not needed for the first run (Reddit-only), needed later for TikTok/Instagram
 

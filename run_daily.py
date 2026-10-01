@@ -92,7 +92,7 @@ def run_theme_with_fallback(theme: str):
     # and documented in TPL_Evolution_Log.md (2026-09-25 run) but not fixed
     # until now.
     print(f"\n--- {theme}: collecting ---")
-    pipeline.collect_theme(theme)
+    # pipeline.collect_theme(theme)
 
     for provider in PROVIDER_SEQUENCE:
         config.LLM_PROVIDER = provider

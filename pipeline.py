@@ -165,15 +165,29 @@ def _chunk(items: List, size: int):
 def extract_theme(seed_theme: str, limit: int = 50) -> Dict[str, int]:
     raw_items = db.get_unprocessed_raw_items(seed_theme, limit=limit)
 
-    keep, skipped = [], 0
+    keep, skipped, skipped_replies = [], 0, 0
+    import re
     for raw_item in raw_items:
-        if len(raw_item.get("content") or "") < MIN_CONTENT_CHARS:
+        content = raw_item.get("content") or ""
+        if len(content) < MIN_CONTENT_CHARS:
             db.mark_raw_item_processed(raw_item["id"])
             skipped += 1
         else:
-            keep.append(raw_item)
+            # Task 8 heuristic: if the comment is overwhelmingly addressing someone else
+            # ("you/your") rather than describing a first-person experience ("i/my/me"),
+            # it's likely a reply or third-party advice, not a mother's own problem.
+            content_lower = content.lower()
+            words = re.findall(r'\b\w+\b', content_lower)
+            you_count = words.count('you') + words.count('your') + words.count('yours')
+            i_count = words.count('i') + words.count('my') + words.count('me') + words.count('mine')
+            
+            if you_count > 0 and you_count > (i_count * 2):
+                db.mark_raw_item_processed(raw_item["id"])
+                skipped_replies += 1
+            else:
+                keep.append(raw_item)
 
-    print(f"[extract] {seed_theme}: {skipped} raw_items skipped pre-LLM (too short), {len(keep)} sent to extraction.")
+    print(f"[extract] {seed_theme}: {skipped} skipped (too short), {skipped_replies} skipped (third-party reply heuristic), {len(keep)} sent to extraction.")
 
     problems_found = 0
     batches_run = 0
