@@ -1,0 +1,32 @@
+name: Viral radar (YouTube Shorts, free)
+
+on:
+  schedule:
+    # Split out from daily.yml on 2026-10-01 -- pausing collection on
+    # 2026-09-27 accidentally disabled this too (it shared daily.yml's
+    # single schedule), even though nobody decided to pause the radar and
+    # Caramelo 03 depends on it for distribution. Runs independently now.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Doppler CLI
+        run: (curl -Ls --tlsv1.2 --proto "=https" https://cli.doppler.com/install.sh || wget -t 3 -qO- https://cli.doppler.com/install.sh) | sudo sh
+
+      - name: Run viral radar
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project tpl-brain --config dev -- python viral_radar.py

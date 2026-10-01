@@ -1,0 +1,39 @@
+name: Drain backlog (extraction + clustering only)
+
+on:
+  schedule:
+    # 06:00 UTC -- collection stays paused (daily.yml), this only works
+    # through raw_items already sitting unprocessed. See drain_backlog.py
+    # for the priority order and quota-fallback logic.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Doppler CLI
+        run: (curl -Ls --tlsv1.2 --proto "=https" https://cli.doppler.com/install.sh || wget -t 3 -qO- https://cli.doppler.com/install.sh) | sudo sh
+
+      - name: Drain backlog
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project tpl-brain --config dev -- python drain_backlog.py
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: drain-log-${{ github.run_id }}
+          path: logs/drain_*.log
+          retention-days: 30
