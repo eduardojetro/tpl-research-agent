@@ -103,17 +103,28 @@ def drain_theme(theme: str) -> bool:
 def main():
     os.makedirs("logs", exist_ok=True)
     log_path = f"logs/drain_{datetime.now().strftime('%Y%m%d')}.log"
-    with open(log_path, "a") as f:
-        sys.stdout = Tee(sys.stdout, f)
-        print(f"\n--- drain_backlog run {datetime.now().isoformat()} ---")
+    original_stdout = sys.stdout
+    # bug fixed 2026-10-02: the first version returned from inside the `with`
+    # block while sys.stdout still pointed at a Tee wrapping the file handle
+    # that `with` was about to close -- Python's interpreter-shutdown flush
+    # of sys.stdout then hit a closed file (ValueError, exit code 120) even
+    # though the actual drain work had already finished correctly. Restoring
+    # sys.stdout in `finally`, before the `with` block closes the file,
+    # fixes it regardless of which branch below returns.
+    try:
+        with open(log_path, "a") as f:
+            sys.stdout = Tee(original_stdout, f)
+            print(f"\n--- drain_backlog run {datetime.now().isoformat()} ---")
 
-        for theme in THEME_PRIORITY:
-            if not drain_theme(theme):
-                print("[drain] Daily free-tier quota exhausted on both providers -- "
-                      "stopping here, tomorrow's run resumes this theme.")
-                return
+            for theme in THEME_PRIORITY:
+                if not drain_theme(theme):
+                    print("[drain] Daily free-tier quota exhausted on both providers -- "
+                          "stopping here, tomorrow's run resumes this theme.")
+                    return
 
-        print("[drain] All priority themes fully drained -- nothing left to do today.")
+            print("[drain] All priority themes fully drained -- nothing left to do today.")
+    finally:
+        sys.stdout = original_stdout
 
 
 if __name__ == "__main__":
