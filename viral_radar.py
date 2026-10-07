@@ -287,6 +287,11 @@ def store(rows: list):
         print("[viral_radar] no rows to store.")
         return
     client = db.get_client()
+    # Postgres rejects an upsert batch that hits the same unique key twice
+    # ("ON CONFLICT DO UPDATE command cannot affect row a second time"),
+    # which crashed the radar on 2026-10-06 and 10-07 when one video came
+    # back from two queries. Keep the last row per key.
+    rows = list({(r["platform"], r["external_id"]): r for r in rows}.values())
     # upsert, not insert -- the same video can legitimately resurface across
     # different queries (e.g. matches both "birth anxiety" and "labor fear"),
     # and running this script twice in one day is meant to refresh stats
