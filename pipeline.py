@@ -7,7 +7,7 @@ Given a seed_theme (must be registered in sources_seed.THEMES):
                   from YouTube (official Data API v3), store as raw_items
                   (deduped by URL). Each source is best-effort: a missing
                   credential just skips that source, see collect_theme().
-  2. FILTER    -- drop items too short to plausibly contain a real problem
+  2. FILTER    -- drop short/duplicate/bot/third-party items (prefilter.py)
                   BEFORE spending any LLM tokens on them (free, no API call).
   3. EXTRACT   -- run the Problem & Question Engine prompt (LLM provider set
                   by TPL_LLM_PROVIDER, default Gemini free tier) in batches
@@ -21,8 +21,8 @@ Given a seed_theme (must be registered in sources_seed.THEMES):
 Cost control is deliberate here, not an afterthought: once Apify adds
 TikTok/Instagram, volume goes from "a couple hundred Reddit posts" to
 thousands of comments across many videos, and both the Apify bill and the
-LLM bill scale with how much raw content reaches step 3. The MIN_CONTENT_CHARS
-filter and llm_client's batching+prompt-caching exist specifically so that
+LLM bill scale with how much raw content reaches step 3. The prefilter
+(MIN_CONTENT_CHARS, dedupe, ...) and llm_client's batching+prompt-caching exist specifically so that
 scaling up sources later doesn't scale up cost linearly.
 
 Evidence grounding (Crawl4AI against NHS/ACOG/Mayo Clinic/etc, see
@@ -38,9 +38,10 @@ import db
 import scoring
 import sources_seed
 from collectors import reddit_collector, youtube_collector, evidence_collector
+import prefilter
 from extraction import llm_client, prompts
 
-MIN_CONTENT_CHARS = 60  # below this, a comment is almost never a real problem statement
+MIN_CONTENT_CHARS = prefilter.MIN_CONTENT_CHARS
 
 # Explicit decision 2026-09-26: pause ALL Apify spend (Reddit fallback here,
 # and the weekly Instagram/TikTok run) to preserve the remaining ~$0.61 of
@@ -165,29 +166,14 @@ def _chunk(items: List, size: int):
 def extract_theme(seed_theme: str, limit: int = 50) -> Dict[str, int]:
     raw_items = db.get_unprocessed_raw_items(seed_theme, limit=limit)
 
-    keep, skipped, skipped_replies = [], 0, 0
-    import re
-    for raw_item in raw_items:
-        content = raw_item.get("content") or ""
-        if len(content) < MIN_CONTENT_CHARS:
-            db.mark_raw_item_processed(raw_item["id"])
-            skipped += 1
-        else:
-            # Task 8 heuristic: if the comment is overwhelmingly addressing someone else
-            # ("you/your") rather than describing a first-person experience ("i/my/me"),
-            # it's likely a reply or third-party advice, not a mother's own problem.
-            content_lower = content.lower()
-            words = re.findall(r'\b\w+\b', content_lower)
-            you_count = words.count('you') + words.count('your') + words.count('yours')
-            i_count = words.count('i') + words.count('my') + words.count('me') + words.count('mine')
-            
-            if you_count > 0 and you_count > (i_count * 2):
-                db.mark_raw_item_processed(raw_item["id"])
-                skipped_replies += 1
-            else:
-                keep.append(raw_item)
+    keep, dropped = prefilter.prefilter(raw_items)
+    reasons: Dict[str, int] = {}
+    for raw_item, reason in dropped:
+        db.mark_raw_item_processed(raw_item["id"])
+        reasons[reason] = reasons.get(reason, 0) + 1
+    skipped = len(dropped)
 
-    print(f"[extract] {seed_theme}: {skipped} skipped (too short), {skipped_replies} skipped (third-party reply heuristic), {len(keep)} sent to extraction.")
+    print(f"[extract] {seed_theme}: {skipped} skipped before LLM {reasons}, {len(keep)} sent to extraction.")
 
     problems_found = 0
     batches_run = 0
@@ -226,6 +212,7 @@ def extract_theme(seed_theme: str, limit: int = 50) -> Dict[str, int]:
     return {
         "skipped_pre_llm": skipped, "analyzed": len(keep), "problems_found": problems_found,
         "llm_calls": batches_run, "quota_exhausted": quota_exhausted,
+        "skipped_by_reason": reasons,
     }
 
 
