@@ -182,17 +182,65 @@ def _fetch_video_stats(video_ids: list) -> dict:
     return result
 
 
+def _clean_vtt(vtt_text: str) -> str:
+    # adapted from last30days (MIT, mvanhorn) lib/youtube_yt.py::_clean_vtt
+    import re
+    text = re.sub(r"^WEBVTT.*?\n\n", "", vtt_text, flags=re.DOTALL)
+    text = re.sub(r"\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}.*\n", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    seen, unique = set(), []
+    for line in text.split("\n"):
+        line = line.strip()
+        if line and line not in seen:  # auto-captions repeat each line across overlapping cues
+            seen.add(line)
+            unique.append(line)
+    return re.sub(r"\s+", " ", " ".join(unique)).strip()
+
+
+def _fetch_transcript_ytdlp(video_id: str):
+    """Fallback only: yt-dlp (no API key, no quota) reads the same public
+    captions through a different route than youtube-transcript-api, which
+    YouTube blocks from some IPs (e.g. GitHub Actions runners). Approach from
+    last30days (MIT, mvanhorn) lib/youtube_yt.py: write the auto-sub VTT to a
+    temp dir and clean it."""
+    try:
+        import glob
+        import tempfile
+        import yt_dlp
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = {
+                "skip_download": True, "writeautomaticsub": True, "writesubtitles": True,
+                "subtitleslangs": ["en"], "subtitlesformat": "vtt",
+                "outtmpl": f"{tmp}/%(id)s", "quiet": True, "no_warnings": True,
+                "socket_timeout": 20, "noprogress": True,
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+            files = glob.glob(f"{tmp}/{video_id}*.vtt")
+            if not files:
+                return None
+            with open(files[0], encoding="utf-8", errors="replace") as f:
+                return _clean_vtt(f.read()) or None
+    except Exception:
+        return None
+
+
 def _fetch_transcript(video_id: str):
     """Free, no API key (not the official YouTube Data API -- scrapes the
     public timedtext endpoint) -- so it costs no quota, only latency. Many
     videos have transcripts disabled or no English auto-caption; that's a
-    normal, expected outcome here, not an error worth logging loudly."""
+    normal, expected outcome here, not an error worth logging loudly.
+    youtube-transcript-api is primary; yt-dlp only runs if it fails or
+    returns nothing."""
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         fetched = YouTubeTranscriptApi().fetch(video_id, languages=("en",))
-        return " ".join(snippet["text"] for snippet in fetched.to_raw_data())
+        text = " ".join(snippet["text"] for snippet in fetched.to_raw_data())
+        if text.strip():
+            return text
     except Exception:
-        return None
+        pass
+    return _fetch_transcript_ytdlp(video_id)
 
 
 def _fetch_channel_avg_views(channel_ids: list) -> dict:
